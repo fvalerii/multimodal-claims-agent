@@ -77,7 +77,7 @@ cp code/.env.example .env   # set ANTHROPIC_API_KEY or GEMINI_API_KEY
 python code/main.py --claims dataset/sample_claims.csv --output output.csv
 
 # Offline evaluation (no API calls — mocks the VLM)
-pytest code/evaluation
+pytest code/evaluation # Runs in ~2 seconds fully offline using mocked VLMs (zero API cost)
 # or:  python code/evaluation/main.py
 ```
 
