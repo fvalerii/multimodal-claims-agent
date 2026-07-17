@@ -9,3 +9,6 @@ pandas==3.0.3             # CSV ingestion + joins
 pillow==12.2.0            # image loading / downscaling
 python-dotenv==1.2.2      # load API keys from .env
 tqdm==4.68.3              # progress bar for the production loop
+
+# -- test / evaluation only --
+pytest==9.1.1             # code/evaluation/main.py pytest suite (mocked, offline)

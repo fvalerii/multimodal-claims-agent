@@ -1,25 +1,98 @@
-# HackerRank Orchestrate
+# Multi-Modal Evidence Review
 
-Starter repository for the **HackerRank Orchestrate** 24-hour hackathon.
+**Agentic vision pipeline that verifies insurance-style damage claims from images, claim chat, and user history.**
 
-Build a system that verifies visual evidence for damage claims across three object types: **cars**, **laptops**, and **packages**.
+Built for the [HackerRank Orchestrate](https://www.hackerrank.com/) 24-hour hackathon (June 2026). Designed as a production-minded system: typed schemas, safety guardrails, provider failover, deterministic post-processing, and a mocked end-to-end evaluation suite that runs offline in ~2 seconds.
 
-Your system will receive claim conversations, one or more submitted images, user claim history, and minimum evidence requirements. It must decide whether the submitted images support the claim, contradict it, or do not provide enough information.
-
-Read [`problem_statement.md`](./problem_statement.md) for the full task spec, input/output schema, and allowed values.
+| | |
+|---|---|
+| **Domain** | Claims / insurance evidence review (cars, laptops, packages) |
+| **Stack** | Python · LangGraph · Claude / Gemini vision · Pydantic · pytest |
+| **Pattern** | Agentic RAG-style graph: guardrail → route → VLM → risk / fallback |
+| **Eval** | Parametrized pytest over labelled sample data + statistical report |
 
 ---
 
-## Contents
+## Why this project
 
-1. [Repository layout](#repository-layout)
-2. [What you need to build](#what-you-need-to-build)
-3. [Where your code goes](#where-your-code-goes)
-4. [Quickstart](#quickstart)
-5. [Evaluation](#evaluation)
-6. [Chat transcript logging](#chat-transcript-logging)
-7. [Submission](#submission)
-8. [Judge interview](#judge-interview)
+Recruiters and hiring managers often ask: *can you ship a reliable LLM system, not just a demo prompt?* This repo is a concrete answer.
+
+It takes messy multimodal inputs (chat transcripts, photos, user history, evidence rules) and returns a **strict, schema-valid decision** for every claim: supported / contradicted / not enough information — plus issue type, object part, severity, risk flags, and which images actually support the call.
+
+---
+
+## What it does
+
+For each row in a claims CSV the system:
+
+1. **Screens** the claim text and retrieved history with a semantic guardrail (injection, scope, relevance)
+2. **Routes** by object type (`car` / `laptop` / `package`) to a specialised vision node
+3. **Calls a VLM** (Claude Sonnet or Gemini Flash) with structured output + enum constraints
+4. **Cross-checks** user history and evidence requirements
+5. **Writes** one valid `output.csv` row — even when images fail, APIs flake, or the guardrail blocks
+
+```text
+START
+  └─▶ semantic_guardrail
+        ├─ block ──▶ guardrail_block_node ──▶ END
+        └─ allow ──▶ evaluate_{car|laptop|package}
+                        ├─ valid   ──▶ posterior_risk_node ──▶ END
+                        └─ invalid ──▶ fast_fail_node      ──▶ END
+```
+
+---
+
+## Highlights (for technical interviews)
+
+| Capability | Implementation |
+|---|---|
+| **Orchestration** | LangGraph `StateGraph` with conditional edges and shared `AgentState` |
+| **Safety** | Semantic guardrail (rules + optional LLM); blocks prompt injection and RAG-context poisoning; fail-open on guardrail API failure |
+| **Multimodal** | Claude / Gemini vision; images downscaled before upload; provider-agnostic dispatcher |
+| **Reliability** | Retry/backoff, one output row per input always, `temperature=0`, typed enums + normalisers |
+| **Determinism where it helps** | Severity mapped from `issue_type`; label remaps (e.g. `glass_shatter → crack`) |
+| **Evaluation** | Pytest suite with mocked LLM/VLM fixtures; answer correctness + retrieval P/R/F1; error variance and edge-case report |
+
+---
+
+## Tech stack
+
+- **Python 3.12**
+- **LangGraph** — stateful agent graph
+- **Anthropic Claude** (default) / **Google Gemini** (fallback) — vision + structured JSON
+- **Pydantic** — strict I/O and guardrail schemas
+- **pandas** — CSV join of claims × history × evidence requirements
+- **pytest** — offline, zero-cost regression suite
+
+---
+
+## Quickstart
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r code/requirements.txt
+cp code/.env.example .env   # set ANTHROPIC_API_KEY or GEMINI_API_KEY
+
+# Sample run (labelled development set)
+python code/main.py --claims dataset/sample_claims.csv --output output.csv
+
+# Offline evaluation (no API calls — mocks the VLM)
+pytest code/evaluation
+# or:  python code/evaluation/main.py
+```
+
+Keys are read from the environment only — never hardcoded. See [`code/README.md`](./code/README.md) for full run / evaluate docs.
+
+---
+
+## Evaluation
+
+Two complementary layers:
+
+1. **Pytest suite** (`code/evaluation/main.py`) — drives the real graph over `sample_claims.csv` with oracle-mocked vision. Reports strict field accuracy, retrieval precision/recall/F1, error variance, and edge-case failures → `code/evaluation/pytest_eval_report.md`.
+2. **Offline scorer** (`code/evaluation/report.py`) — scores a real `output.csv` against ground truth and writes cost/latency/ops analysis → `code/evaluation/evaluation_report.md`.
+
+On the oracle-mocked plumbing check (pipeline fidelity, not live model quality), sample-field accuracies land in the ~85–100% range depending on the field; divergences are intentional (e.g. history-derived risk flags, deterministic severity mapping). Live VLM accuracy depends on the chosen provider/model — see the generated reports after a real run.
 
 ---
 
@@ -27,135 +100,43 @@ Read [`problem_statement.md`](./problem_statement.md) for the full task spec, in
 
 ```text
 .
-├── AGENTS.md                         # Rules for AI coding tools + transcript logging
-├── problem_statement.md              # Full task description and I/O schema
-├── README.md                         # You are here
-├── code/                             # Build your solution here
-│   ├── main.py                       # Suggested terminal entry point
+├── README.md                 # Portfolio overview (this file)
+├── problem_statement.md      # Original challenge I/O contract
+├── AGENTS.md                 # Hackathon agent / logging rules
+├── code/
+│   ├── main.py               # Pipeline: guardrail, graph, vision, production loop
+│   ├── README.md             # Detailed how-to
+│   ├── requirements.txt
 │   └── evaluation/
-│       └── main.py                   # Suggested evaluation entry point
+│       ├── main.py           # Pytest suite (mocked, offline)
+│       ├── report.py         # Scorer for a real output.csv
+│       └── *.md              # Generated evaluation reports
 └── dataset/
-    ├── sample_claims.csv             # Inputs + expected outputs for development
-    ├── claims.csv                    # Inputs only; run your system on these rows
-    ├── user_history.csv              # Historical claim counts and risk context
-    ├── evidence_requirements.csv     # Minimum image evidence requirements
+    ├── sample_claims.csv     # Labels for development + tests
+    ├── claims.csv            # Hold-out inputs
+    ├── user_history.csv
+    ├── evidence_requirements.csv
     └── images/
-        ├── sample/                   # Images referenced by sample_claims.csv
-        └── test/                     # Images referenced by claims.csv
 ```
 
 ---
 
-## What you need to build
+## Design choices worth discussing
 
-A system that, for each row in `dataset/claims.csv`, produces one row in `output.csv`.
-
-Input fields:
-
-| Column | Meaning |
-|---|---|
-| `user_id` | User submitting the claim; use this to look up `dataset/user_history.csv` |
-| `image_paths` | One or more submitted image paths, separated by semicolons |
-| `user_claim` | Chat transcript describing the issue |
-| `claim_object` | `car`, `laptop`, or `package` |
-
-Required output fields:
-
-| Column | Meaning |
-|---|---|
-| `evidence_standard_met` | Whether the image set is sufficient to evaluate the claim |
-| `evidence_standard_met_reason` | Short reason for the evidence decision |
-| `risk_flags` | Semicolon-separated risk flags, or `none` |
-| `issue_type` | Visible issue type |
-| `object_part` | Relevant object part |
-| `claim_status` | `supported`, `contradicted`, or `not_enough_information` |
-| `claim_status_justification` | Concise explanation grounded in the image evidence |
-| `supporting_image_ids` | Image IDs supporting the decision, or `none` |
-| `valid_image` | Whether the image set is usable for automated review |
-| `severity` | `none`, `low`, `medium`, `high`, or `unknown` |
-
-Hard requirements:
-
-- Must read the provided CSV files and local images.
-- Must produce `output.csv` with the exact schema in `problem_statement.md`.
-- Must include an evaluation workflow
-- Must avoid hardcoded test labels or file-specific answers.
-
-Beyond that you are free to bring your own approach: VLMs, LLMs, structured prompting, rule layers, batching, caching, evaluation pipelines, model comparison, or anything else.
+- **Guardrail before vision** — cheap safety/scope screen before expensive multimodal calls.
+- **Structured output over free text** — enum-constrained schemas so the CSV never contains illegal labels.
+- **Deterministic severity** — grounded in `issue_type` to cut run-to-run variance.
+- **Fail closed for bad evidence, fail open for guardrail outages** — never silently drop a claim row; never block all traffic because the safety LLM is down.
+- **Provider abstraction** — swap Claude ↔ Gemini with config, not a rewrite.
 
 ---
 
-## Where your code goes
+## Challenge context
 
-All of your work belongs in [`code/`](./code/). The repo ships with empty starter files that you can grow into your full solution.
-
-Suggested conventions:
-
-- Put your main runnable solution in `code/main.py`, or document your own entry point clearly.
-- Put evaluation code under `code/evaluation/` or an `evaluation/` folder included in your final `code.zip`.
-- Write final predictions to `output.csv`.
+Built during HackerRank Orchestrate (June 2026), a solo 24-hour multi-modal evidence review challenge. Full task spec: [`problem_statement.md`](./problem_statement.md).
 
 ---
 
-## Quickstart
+## License / notes
 
-Clone this repository:
-
-```bash
-git clone git@github.com:interviewstreet/hackerrank-orchestrate-june26.git
-cd hackerrank-orchestrate-june26
-```
-
-You are free to use any language or runtime. Python, JavaScript, and TypeScript are all reasonable choices.
-
----
-
-## Evaluation
-
-The evaluation report should include:
-
-- metrics on `dataset/sample_claims.csv`
-- at least two strategies, prompts, or model configurations compared
-- the final strategy used for `output.csv`
-- operational analysis covering model calls, token usage, image usage, approximate cost, runtime, and TPM/RPM considerations
-
----
-
-## Chat transcript logging
-
-This repo ships with an `AGENTS.md` that modern AI coding tools may read. It instructs the tool to append conversation turns to a shared log file:
-
-| Platform | Path |
-|---|---|
-| macOS / Linux | `$HOME/hackerrank_orchestrate/log.txt` |
-| Windows | `%USERPROFILE%\hackerrank_orchestrate\log.txt` |
-
-You will upload this log as your chat transcript at submission time. The chat transcript means your conversation with the AI coding tool you used to build the system. It is not the runtime logs, reasoning trace, or conversation history produced by the claim-verification agent you are building.
-
-If you use multiple AI tools, include the relevant conversation logs from all of them in the same transcript file. Separate each tool's section with a clear divider and label it with the tool name.
-
-Never paste secrets into the chat. If secrets are needed, use environment variables.
-
----
-
-## Submission
-
-Submit the following files as instructed by HackerRank:
-
-1. **Code zip**: zip your runnable solution, README, prompts/configs, and evaluation folder. Exclude virtualenvs, `node_modules`, build artifacts, and unnecessary generated files.
-2. **Predictions CSV**: your final `output.csv` for all rows in `dataset/claims.csv`.
-3. **Chat transcript**: the `log.txt` from the path in [Chat transcript logging](#chat-transcript-logging).
-
-Before submitting, confirm:
-
-- `output.csv` has one row per row in `dataset/claims.csv`.
-- `output.csv` has the exact required columns in the exact required order.
-- Your evaluation files are included in `code.zip`.
-
----
-
-## Judge interview
-
-After submission, the AI Judge may ask about your approach, implementation decisions, model usage, evaluation strategy, and how you used AI while building the solution.
-
-Be prepared to explain your solution in detail.
+Dataset and starter materials belong to the challenge organisers. Solution code in `code/` is the project deliverable. Do not commit API keys; use `.env` (gitignored).

@@ -22,6 +22,8 @@ env/
 output.csv
 *.run_stats.json
 *.log
+code.zip
+.pytest_cache/
 
 # --- OS / editor -------------------------------------------------------------
 .DS_Store

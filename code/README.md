@@ -1,4 +1,7 @@
-# Multi-Modal Evidence Review — Solution
+# Multi-Modal Evidence Review — Solution Guide
+
+Technical how-to for the pipeline in this folder. For a portfolio-style overview
+(problem, architecture highlights, recruiter summary), see the [root README](../README.md).
 
 A LangGraph-orchestrated pipeline that verifies damage claims (cars, laptops,
 packages) against their submitted images. For every row in a claims CSV it
@@ -14,17 +17,30 @@ The system is a [LangGraph](https://github.com/langchain-ai/langgraph)
 
 ```text
 START
-  │  route_by_object  (reads claim.claim_object)
-  ├── car      → evaluate_car_node ┐
-  ├── laptop   → evaluate_laptop_node ├─ (shared _evaluate_claim_images)
-  └── package  → evaluate_package_node ┘
-                        │  route_post_evaluation (findings["valid_image"])
-                        ├── valid   → posterior_risk_node ── END
-                        └── invalid → fast_fail_node ────── END
+  │
+  ▼
+semantic_guardrail  (safety / relevance / scope screen)
+  │  route_after_guardrail
+  ├── block → guardrail_block_node ───────────────────── END
+  └── allow → route_by_object  (reads claim.claim_object)
+        ├── car      → evaluate_car_node ┐
+        ├── laptop   → evaluate_laptop_node ├─ (shared _evaluate_claim_images)
+        └── package  → evaluate_package_node ┘
+                              │  route_post_evaluation (findings["valid_image"])
+                              ├── valid   → posterior_risk_node ── END
+                              └── invalid → fast_fail_node ────── END
 ```
 
-- **Routing** (`route_by_object`) sends each claim to the object-specific
-  vision node so prompts can use the correct `object_part` vocabulary.
+- **Semantic guardrail** (`semantic_guardrail_node`) is the first hop. It
+  screens the incoming claim text and retrieved history context for prompt
+  injection / claim-manipulation, relevance, and scope, then routes unsafe or
+  out-of-bounds requests to the safe fallback `guardrail_block_node` instead of
+  the VLM. Layered as deterministic rules + an optional LLM pass, controlled by
+  `GUARDRAIL_MODE` (`hybrid` default · `rules` · `off`); the LLM layer fails
+  open so a transient outage never drops a legitimate claim.
+- **Routing** (`route_by_object`) sends each allowed claim to the
+  object-specific vision node so prompts can use the correct `object_part`
+  vocabulary.
 - **Vision nodes** all delegate to one helper (`_evaluate_claim_images`) that
   loads + downscales images, builds the prompt, and calls the VLM with a
   Pydantic-typed structured-output schema.
@@ -91,15 +107,42 @@ Robustness guarantees:
 
 ## 4. Evaluate
 
+There are two complementary evaluators.
+
+### 4.1 Pytest suite (`code/evaluation/main.py`) — mocked, offline, no cost
+
 ```bash
-python code/evaluation/main.py
+pytest code/evaluation           # picks up pytest.ini and collects main.py
+# or:  python code/evaluation/main.py    # convenience wrapper (pytest -s -v)
 ```
 
-Joins `output.csv` against `dataset/sample_claims.csv` on `user_id` and writes
-`code/evaluation/evaluation_report.md` with per-field accuracy (claim_status,
-issue_type, object_part, evidence_standard_met, valid_image, severity) plus an
-operational analysis (model calls, tokens, cost, latency, RPM/TPM) including a
-projection to the full test set. The evaluator auto-reads
+Runs the **real** LangGraph pipeline end-to-end against every row of
+`dataset/sample_claims.csv`, but with all LLM/VLM API calls mocked via pytest
+fixtures (a ground-truth *oracle* vision mock), so the whole suite finishes in
+~2 s with no network and no cost. It uses `pytest.mark.parametrize` to iterate
+the dataset and computes strict, exact-match **answer-correctness** metrics plus
+set-based **retrieval precision / recall / F1** for `supporting_image_ids` and
+`risk_flags`. It also covers the semantic guardrail (injection, RAG-context
+poisoning, hybrid-LLM block, fail-open, schema strictness).
+
+At the end it writes `code/evaluation/pytest_eval_report.md` — a statistical
+breakdown with per-field accuracy + error variance, precision/recall
+distributions (mean/std/quartiles), and an enumerated list of edge-case
+failures — and enforces aggregate quality floors as regression guards. Because
+the vision layer is a faithful oracle, any divergence is attributable to the
+pipeline's own deterministic post-processing (severity map, evidence gating,
+history-derived flags), which the report makes explicit.
+
+### 4.2 Offline scorer (`code/evaluation/report.py`) — scores a real run
+
+```bash
+python code/evaluation/report.py
+```
+
+Joins a previously generated `output.csv` against `dataset/sample_claims.csv` on
+`user_id` and writes `code/evaluation/evaluation_report.md` with per-field
+accuracy plus an operational analysis (model calls, tokens, cost, latency,
+RPM/TPM) and a projection to the full test set. It auto-reads
 `output.run_stats.json` for the real model/runtime; `--model`,
 `--runtime-seconds`, and `--test-rows` override it.
 
@@ -128,10 +171,13 @@ projection to the full test set. The evaluator auto-reads
 
 ```text
 code/
-├── main.py              # pipeline: models, ingestion, graph, production loop
-├── requirements.txt     # pinned dependencies
+├── main.py              # pipeline: models, guardrail, ingestion, graph, loop
+├── requirements.txt     # pinned dependencies (incl. pytest for the suite)
 ├── README.md            # this file
 └── evaluation/
-    ├── main.py              # accuracy + operational analysis
-    └── evaluation_report.md # generated report
+    ├── main.py                 # pytest suite (mocked, offline) + stats report
+    ├── report.py               # offline scorer for a real output.csv
+    ├── pytest.ini              # lets pytest collect main.py
+    ├── pytest_eval_report.md   # generated: statistical breakdown (suite)
+    └── evaluation_report.md    # generated: accuracy + ops analysis (report.py)
 ```
