@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from langgraph.graph import END, START, StateGraph
 
 # Load .env before any code that reads env vars (genai client, etc.).
@@ -946,6 +946,12 @@ class SemanticGuardrailResult(BaseModel):
     coherence: ``decision``/``category`` are *derived* from the three boolean
     axes so a sloppy or adversarial model response can never yield an
     inconsistent verdict (e.g. ``is_safe=false`` but ``decision="allow"``).
+
+    Unknown enum strings from the LLM are *coerced* (not rejected) so a
+    hallucinated ``category`` cannot raise ``ValidationError`` and accidentally
+    fail-open a claim the axes already marked unsafe. Transport / schema
+    failures that omit the boolean axes still raise and are fail-opened by
+    ``semantic_guardrail_node``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -957,6 +963,44 @@ class SemanticGuardrailResult(BaseModel):
     category: GuardrailCategory
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _coerce_category(cls, value: Any) -> Any:
+        if isinstance(value, GuardrailCategory):
+            return value
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return GuardrailCategory.unsafe_content
+        normalised = str(value).strip().lower().replace(" ", "_").replace("-", "_")
+        try:
+            return GuardrailCategory(normalised)
+        except ValueError:
+            # Hallucinated label — keep the request blockable; coherence will
+            # still rewrite to ``ok`` if all three axes pass.
+            return GuardrailCategory.unsafe_content
+
+    @field_validator("decision", mode="before")
+    @classmethod
+    def _coerce_decision(cls, value: Any) -> Any:
+        if isinstance(value, GuardrailDecision):
+            return value
+        if value is None:
+            return GuardrailDecision.block
+        normalised = str(value).strip().lower()
+        try:
+            return GuardrailDecision(normalised)
+        except ValueError:
+            # Coherence overwrites from axes; default closed until then.
+            return GuardrailDecision.block
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _clamp_confidence(cls, value: Any) -> Any:
+        try:
+            conf = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, conf))
 
     @model_validator(mode="after")
     def _enforce_coherence(self) -> "SemanticGuardrailResult":
@@ -1142,7 +1186,9 @@ def _run_guardrail_llm(prompt: str) -> SemanticGuardrailResult:
     output, returning a validated ``SemanticGuardrailResult``.
 
     Mirrors the vision dispatcher: Anthropic via forced tool-use, Google via
-    ``response_schema``. Raises on failure so the node can fail-open.
+    ``response_schema``. Always re-validates through ``SemanticGuardrailResult``
+    so provider-parsed objects / raw dicts cannot skip enum coercion. Raises on
+    transport failure so the node can fail-open.
     """
     if VISION_PROVIDER == "anthropic":
         response = _anthropic_messages_with_retry(
@@ -1159,7 +1205,10 @@ def _run_guardrail_llm(prompt: str) -> SemanticGuardrailResult:
         )
         for block in response.content:
             if block.type == "tool_use":
-                return SemanticGuardrailResult(**block.input)
+                raw = block.input
+                if isinstance(raw, SemanticGuardrailResult):
+                    return raw
+                return SemanticGuardrailResult(**dict(raw))
         raise ValueError(
             f"Claude returned no tool_use block; stop_reason={response.stop_reason}"
         )
@@ -1178,7 +1227,13 @@ def _run_guardrail_llm(prompt: str) -> SemanticGuardrailResult:
     parsed = response.parsed
     if parsed is None:
         raise ValueError("Gemini guardrail response.parsed was None (non-conforming JSON).")
-    return parsed
+    if isinstance(parsed, SemanticGuardrailResult):
+        # Re-validate so any SDK-constructed instance still runs our coercions
+        # if the SDK ever loosens enum enforcement.
+        return SemanticGuardrailResult(**parsed.model_dump())
+    if isinstance(parsed, dict):
+        return SemanticGuardrailResult(**parsed)
+    raise ValueError(f"Unexpected Gemini guardrail parse type: {type(parsed)!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -1306,6 +1361,10 @@ def semantic_guardrail_node(state: AgentState) -> dict[str, Any]:
         return {"guardrail": det}
 
     # hybrid → escalate the (rule-clean) request to the semantic LLM pass
+    # Fail-open only on transport / hard schema failures (missing axes, etc.).
+    # Hallucinated enum labels are coerced inside SemanticGuardrailResult so a
+    # "block" intent on the boolean axes cannot be turned into an allow by a
+    # ValidationError.
     try:
         result = _run_guardrail_llm(_build_guardrail_prompt(claim, history))
         return {"guardrail": result}
@@ -1350,13 +1409,26 @@ def guardrail_block_node(state: AgentState) -> dict[str, Any]:
     Never calls the VLM. Emits a minimal, schema-valid ``ClaimOutput`` marked
     not_enough_information + manual_review_required, with category-appropriate
     risk flags, so ``output.csv`` still has exactly one well-formed row.
+
+    Also writes a clean ``findings`` payload so any stale findings from a
+    checkpointer / reused state cannot leak into a later node or confuse
+    debugging. ``fast_fail_node`` is unreachable from this branch (graph edge
+    goes straight to END), but clearing findings keeps the terminal state
+    self-consistent for the CSV writer and any future edges.
     """
     ctx: ClaimContext = state["context"]
     claim: ClaimInput = ctx["claim"]
-    guard: Optional[SemanticGuardrailResult] = state.get("guardrail")
+    guard = state.get("guardrail")
 
-    category = guard.category.value if guard else GuardrailCategory.ok.value
-    reason = guard.reason if guard else "Blocked by semantic guardrail."
+    if isinstance(guard, SemanticGuardrailResult):
+        category = guard.category.value
+        reason = guard.reason
+    else:
+        # Defensive: corrupted / unexpected guardrail payload must not crash
+        # the terminal node — still emit a valid CSV row.
+        category = GuardrailCategory.unsafe_content.value
+        reason = "Blocked by semantic guardrail (malformed guardrail state)."
+
     flags = _GUARDRAIL_FLAGS_BY_CATEGORY.get(
         category, [RiskFlag.manual_review_required.value]
     )
@@ -1380,7 +1452,14 @@ def guardrail_block_node(state: AgentState) -> dict[str, Any]:
         valid_image=False,
         severity=Severity.unknown,
     )
-    return {"output": output}
+    # Override findings so nothing partial remains in state for this terminal hop.
+    return {
+        "findings": empty_findings(
+            valid_image=False,
+            justification=f"Semantic guardrail blocked: {reason}",
+        ),
+        "output": output,
+    }
 
 
 # -- Post-guardrail router ----------------------------------------------------
@@ -1395,7 +1474,12 @@ def route_after_guardrail(
     through to the normal object-based vision routing.
     """
     guard = state.get("guardrail")
-    if guard is not None and guard.decision == GuardrailDecision.block:
+    if isinstance(guard, SemanticGuardrailResult):
+        if guard.decision == GuardrailDecision.block:
+            return "guardrail_block_node"
+    elif guard is not None:
+        # Unexpected type — fail closed to the safe terminal rather than
+        # sending a corrupted gate decision into the VLM path.
         return "guardrail_block_node"
     return route_by_object(state)
 
