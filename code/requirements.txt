@@ -1,0 +1,11 @@
+# Multi-modal evidence review pipeline — pinned dependencies
+# Install with:  pip install -r code/requirements.txt
+
+langgraph==1.2.6          # stateful orchestration graph
+langchain-core==1.4.8     # transitive base used by langgraph
+anthropic==0.111.0        # Claude vision (default provider)
+google-genai==2.9.0       # Gemini vision (fallback provider)
+pandas==3.0.3             # CSV ingestion + joins
+pillow==12.2.0            # image loading / downscaling
+python-dotenv==1.2.2      # load API keys from .env
+tqdm==4.68.3              # progress bar for the production loop
