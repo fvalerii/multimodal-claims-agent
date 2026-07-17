@@ -125,6 +125,7 @@ On the oracle-mocked plumbing check (pipeline fidelity, not live model quality),
 
 - **Guardrail before vision** — cheap safety/scope screen before expensive multimodal calls.
 - **Structured output over free text** — enum-constrained schemas so the CSV never contains illegal labels.
+- **State isolation & schema hardening** — clamped hallucinated enum values before Pydantic validation to prevent silent fail-opens, and explicitly cleared checkpointer states on blocked branches to prevent data leaks between runs.
 - **Deterministic severity** — grounded in `issue_type` to cut run-to-run variance.
 - **Fail closed for bad evidence, fail open for guardrail outages** — never silently drop a claim row; never block all traffic because the safety LLM is down.
 - **Provider abstraction** — swap Claude ↔ Gemini with config, not a rewrite.
