@@ -147,4 +147,5 @@ Built during HackerRank Orchestrate (June 2026), a solo 24-hour multi-modal evid
 ## License / notes
 
 Dataset and starter materials belong to the challenge organisers. Solution code in `code/` is the project deliverable. Do not commit API keys; use `.env` (gitignored).
+
 This project is licensed under the [MIT License](./LICENSE).
