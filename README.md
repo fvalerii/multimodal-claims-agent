@@ -13,6 +13,12 @@ Built for the [HackerRank Orchestrate](https://www.hackerrank.com/) 24-hour hack
 
 ---
 
+<p align="center">
+  <img src="./assets/hackerrank_certificate.png" alt="HackerRank Orchestrate Certificate" width="600"/>
+</p>
+
+---
+
 ## Why this project
 
 Recruiters and hiring managers often ask: *can you ship a reliable LLM system, not just a demo prompt?* This repo is a concrete answer.
