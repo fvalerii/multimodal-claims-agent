@@ -16,6 +16,8 @@ Built for the [HackerRank Orchestrate](https://www.hackerrank.com/) 24-hour hack
 <p align="center">
   <img src="./assets/hackerrank_certificate.png" alt="HackerRank Orchestrate Certificate" width="600"/>
 </p>
+*HackerRank Orchestrate Hackathon (June 2026) — Bronze Medal (Ranked 209 / 1,773)*
+
 
 ---
 
