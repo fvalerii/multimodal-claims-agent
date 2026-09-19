@@ -2,6 +2,12 @@
 
 **Agentic vision pipeline that verifies insurance-style damage claims from images, claim chat, and user history.**
 
+![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=flat-square&logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-Agentic%20Framework-FF6F61?style=flat-square)
+![Claude / Gemini Vision](https://img.shields.io/badge/Claude%20%7C%20Gemini-Multimodal%20Vision-8A2BE2?style=flat-square)
+![Pydantic](https://img.shields.io/badge/Pydantic-Data%20Validation-e92063?style=flat-square)
+![HackerRank](https://img.shields.io/badge/HackerRank-Bronze%20Medal-CD7F32?style=flat-square&logo=hackerrank&logoColor=white)
+
 Built for the [HackerRank Orchestrate](https://www.hackerrank.com/) 24-hour hackathon (June 2026). Designed as a production-minded system: typed schemas, safety guardrails, provider failover, deterministic post-processing, and a mocked end-to-end evaluation suite that runs offline in ~2 seconds.
 
 | | |
