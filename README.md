@@ -1,4 +1,4 @@
-# Multi-Modal Evidence Review
+# Multi-Modal Claims Agent
 
 **Agentic vision pipeline that verifies insurance-style damage claims from images, claim chat, and user history.**
 
